@@ -1,0 +1,42 @@
+LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+USE ieee.numeric_std.ALL;
+
+ENTITY debounce IS
+    PORT (
+        clk     : IN  STD_LOGIC;
+        btn_in  : IN  STD_LOGIC;
+        btn_out : OUT STD_LOGIC
+    );
+END debounce;
+
+ARCHITECTURE behavioral OF debounce IS
+    CONSTANT max_count : INTEGER := 15_000_000;
+    
+BEGIN
+    PROCESS(clk)
+        VARIABLE btn_sync1  : STD_LOGIC := '0';
+        VARIABLE btn_sync2  : STD_LOGIC := '0';
+        VARIABLE debounced  : STD_LOGIC := '0';
+        VARIABLE count      : INTEGER RANGE 0 TO max_count := 0;
+    BEGIN
+        IF RISING_EDGE(clk) THEN
+            btn_sync1 := btn_in;
+            btn_sync2 := btn_sync1;
+            btn_out <= '0';
+            IF btn_sync2 /= debounced THEN
+                IF count < max_count THEN
+                    count := count + 1;
+                ELSE
+                    debounced := btn_sync2;
+                    count  := 0;
+                    IF btn_sync2 = '1' THEN
+                        btn_out <= '1';
+                    END IF;
+                END IF;
+            ELSE
+                count := 0;
+            END IF;
+        END IF;
+    END PROCESS;
+END behavioral;

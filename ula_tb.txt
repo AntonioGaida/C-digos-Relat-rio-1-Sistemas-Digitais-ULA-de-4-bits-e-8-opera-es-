@@ -1,0 +1,112 @@
+LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+
+ENTITY ula_tb IS
+END ula_tb;
+
+ARCHITECTURE sim OF ula_tb IS
+
+    COMPONENT ula
+        PORT(
+            input          : IN  STD_LOGIC_VECTOR(3 DOWNTO 0);
+            clock          : IN  STD_LOGIC;
+            button         : IN  STD_LOGIC;
+            output         : OUT STD_LOGIC_VECTOR(3 DOWNTO 0);
+            flag_zero      : OUT STD_LOGIC;
+            flag_negative  : OUT STD_LOGIC;
+            flag_carryout  : OUT STD_LOGIC;
+            flag_overflow  : OUT STD_LOGIC
+        );
+    END COMPONENT;
+
+    SIGNAL input         : STD_LOGIC_VECTOR(3 DOWNTO 0) := "0000";
+    SIGNAL clock         : STD_LOGIC := '0';
+    SIGNAL button        : STD_LOGIC := '0';
+    SIGNAL output        : STD_LOGIC_VECTOR(3 DOWNTO 0);
+    SIGNAL flag_zero     : STD_LOGIC;
+    SIGNAL flag_negative : STD_LOGIC;
+    SIGNAL flag_carryout : STD_LOGIC;
+    SIGNAL flag_overflow : STD_LOGIC;
+
+    CONSTANT clk_period  : TIME    := 20 NS; -- 50 MHz
+    -- Must be bigger than max_count of the debouncer (use max_count = 5 to simulate)
+    CONSTANT hold_cycles : INTEGER := 20;
+
+BEGIN
+
+    uut : ula PORT MAP (
+        input => input, clock => clock, button => button,
+        output => output, flag_zero => flag_zero, flag_negative => flag_negative,
+        flag_carryout => flag_carryout, flag_overflow => flag_overflow
+    );
+
+    clock <= NOT clock AFTER clk_period / 2;
+
+    PROCESS
+
+        -- One button press: sets the keys, holds the button, releases it
+        PROCEDURE press(v : IN STD_LOGIC_VECTOR(3 DOWNTO 0)) IS
+        BEGIN
+            input <= v;
+            WAIT FOR 2 * clk_period;
+            button <= '1';
+            WAIT FOR hold_cycles * clk_period;
+            button <= '0';
+            WAIT FOR hold_cycles * clk_period;
+        END PROCEDURE;
+
+        -- Binary operation: op, A, B, execute, check, reset
+        PROCEDURE run_bin(
+            op, a, b, expected : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
+            name               : IN STRING) IS
+        BEGIN
+            press(op);
+            press(a);
+            press(b);
+            press("0000"); -- executes the operation
+            ASSERT output = expected
+                REPORT name & ": wrong result" SEVERITY ERROR;
+            WAIT FOR 20 * clk_period; -- time to take the screenshot
+            press("0000"); -- goes back to the initial state
+        END PROCEDURE;
+
+        -- Unary operation: op, A, execute, check, reset
+        PROCEDURE run_un(
+            op, a, expected : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
+            name            : IN STRING) IS
+        BEGIN
+            press(op);
+            press(a);
+            press("0000"); -- executes the operation
+            ASSERT output = expected
+                REPORT name & ": wrong result" SEVERITY ERROR;
+            WAIT FOR 20 * clk_period;
+            press("0000");
+        END PROCEDURE;
+
+    BEGIN
+        WAIT FOR 10 * clk_period;
+
+        --          op      A       B       expected
+        run_bin("0000", "0011", "0010", "0101", "ADD 3+2=5");
+        run_bin("0000", "0111", "0001", "1000", "ADD 7+1 (overflow)");
+        run_bin("0001", "0101", "0011", "0010", "SUB 5-3=2");
+        run_bin("0001", "0010", "0101", "1101", "SUB 2-5=-3 (negative)");
+        run_bin("0010", "0001", "0010", "0100", "SHIFT 1<<2=4");
+        run_bin("0011", "0101", "0101", "0010", "CMP A=B");
+        run_bin("0011", "0010", "0101", "0001", "CMP A<B");
+        run_bin("0011", "0101", "0010", "0100", "CMP A>B");
+        run_bin("0100", "1100", "1010", "0110", "XOR");
+        run_bin("0101", "1100", "1010", "1001", "XNOR");
+        run_bin("0001", "0011", "0011", "0000", "SUB 3-3=0 (zero)");
+
+        --         op      A       expected
+        run_un ("0110", "0011", "1101", "2'S COMPLEMENT of 3");
+        run_un ("0111", "1101", "0011", "ABS of -3");
+        run_un ("0111", "0101", "0101", "ABS of 5");
+
+        REPORT "ULA testbench finished" SEVERITY NOTE;
+        WAIT;
+    END PROCESS;
+
+END sim;

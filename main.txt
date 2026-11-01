@@ -1,0 +1,188 @@
+﻿LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+USE ieee.numeric_std.ALL;
+
+ENTITY ula IS
+    PORT(
+        input          : IN STD_LOGIC_VECTOR(3 DOWNTO 0); -- keys 
+        clock          : IN STD_LOGIC; -- oscillator E12 
+        button         : IN STD_LOGIC; -- button 
+        output         : OUT STD_LOGIC_VECTOR(3 DOWNTO 0) := "0000"; -- leds 
+        flag_zero      : OUT STD_LOGIC := '1'; -- led w21
+        flag_negative  : OUT STD_LOGIC := '0'; -- led y22
+        flag_carryout  : OUT STD_LOGIC := '0'; -- led v20
+        flag_overflow  : OUT STD_LOGIC := '0' -- led v19
+    );
+END ula;
+
+ARCHITECTURE main OF ula IS
+
+    -- Input of the button without debouncing
+    SIGNAL debounced_button : STD_LOGIC;
+
+    COMPONENT debounce
+        PORT(
+            clk    : IN STD_LOGIC;
+            btn_in : IN STD_LOGIC;
+            btn_out : OUT STD_LOGIC
+        );
+    END COMPONENT;
+
+BEGIN
+
+    debounce_instance : debounce
+        PORT MAP (
+            clk    => clock,
+            btn_in => button,
+            btn_out => debounced_button
+        );
+
+PROCESS(clock)
+
+-- Variable to control the state of the ULA
+VARIABLE state : STD_LOGIC_VECTOR(2 DOWNTO 0) := "000";
+
+-- Variables to store the operation and the entries
+VARIABLE operation  : STD_LOGIC_VECTOR(3 DOWNTO 0);
+VARIABLE entry1     : STD_LOGIC_VECTOR(3 DOWNTO 0);
+VARIABLE entry2     : STD_LOGIC_VECTOR(3 DOWNTO 0);    
+
+-- Variable to hold the result temporarily
+VARIABLE result_control : STD_LOGIC_VECTOR(3 DOWNTO 0) := "0000";
+
+-- Variable used to control the carry
+VARIABLE carry_control : STD_LOGIC_VECTOR(3 DOWNTO 0) := "0000";
+
+BEGIN
+
+    -- If the button was pressed
+    IF RISING_EDGE(clock) THEN
+		IF(debounced_button = '1') THEN
+        CASE state IS
+            WHEN "000" =>
+					 flag_zero <= '0';
+					 flag_negative <= '1';
+                -- Hold the value of the operation and goes to the next stage
+                operation := input;
+                state := "001";
+
+            WHEN "001" =>
+					 flag_negative <= '0';
+                -- Hold the value of the entry used
+                entry1 := input;
+                
+                -- Direct the ULA to the next stage depending on the operation chosen
+                IF (operation = "0110" OR operation = "0111") THEN
+                    state := "011"; -- Unary operations
+                ELSE
+                    state := "010"; -- Binary operations
+						  flag_carryout <= '1';
+                END IF;
+
+            WHEN "010" =>
+                flag_carryout <= '0';
+					 flag_overflow <= '1';
+                -- Hold the value of the second entry used
+                entry2 := input;
+                state := "011";
+
+            WHEN "011" =>
+					 flag_overflow <= '0';
+                -- Run operations
+                CASE operation IS
+                    WHEN "0000" => -- Addition
+                        result_control := STD_LOGIC_VECTOR(SIGNED(entry1) + SIGNED(entry2));
+
+                        -- Carry during the sum
+                        carry_control(0) := entry1(0) AND entry2(0);
+                        carry_control(1) := (carry_control(0) AND entry1(1)) OR (carry_control(0) AND entry2(1)) OR (entry1(1) AND entry2(1));
+                        carry_control(2) := (carry_control(1) AND entry1(2)) OR (carry_control(1) AND entry2(2)) OR (entry1(2) AND entry2(2));
+                        carry_control(3) := (carry_control(2) AND entry1(3)) OR (carry_control(2) AND entry2(3)) OR (entry1(3) AND entry2(3));
+
+                        -- Detecting carryout and overflow
+                        flag_carryout <= carry_control(3);
+                        flag_overflow <= carry_control(3) XOR carry_control(2);
+
+                    WHEN "0001" => -- Subtraction
+                        result_control := STD_LOGIC_VECTOR(SIGNED(entry1) - SIGNED(entry2));
+
+                        -- Carry during the subtraction (borrow out)
+                        carry_control(0) := (NOT entry1(0)) AND entry2(0);
+                        carry_control(1) := (carry_control(0) AND (NOT (entry1(1) XOR entry2(1)))) OR ((NOT entry1(1)) AND entry2(1));
+                        carry_control(2) := (carry_control(1) AND (NOT (entry1(2) XOR entry2(2)))) OR ((NOT entry1(2)) AND entry2(2));
+                        carry_control(3) := (carry_control(2) AND (NOT (entry1(3) XOR entry2(3)))) OR ((NOT entry1(3)) AND entry2(3));
+
+                        -- Detecting carryout and overflow
+                        flag_carryout <= carry_control(3);
+                        flag_overflow <= carry_control(3) XOR carry_control(2);
+
+                    WHEN "0010" => -- Bit Shift
+                        result_control := STD_LOGIC_VECTOR(SHIFT_LEFT(UNSIGNED(entry1), TO_INTEGER(UNSIGNED(entry2))));
+
+                    WHEN "0011" => -- Comparison
+                        -- Stores the subtraction at the variable that will then be overwritten
+                        result_control := STD_LOGIC_VECTOR(SIGNED(entry1) - SIGNED(entry2));
+
+                        IF result_control = "0000" THEN -- A = B
+                            result_control := "0010";
+
+                        ELSIF result_control(3) = '1' THEN -- A < B
+                            result_control := "0001";
+
+                        ELSE -- A > B
+                            result_control := "0100";
+
+                        END IF;
+
+                    WHEN "0100" => -- XOR
+                        result_control := entry1 XOR entry2;
+
+                    WHEN "0101" => -- XNOR
+                        result_control := entry1 XNOR entry2;
+
+                    WHEN "0110" => -- 2's Complement
+                        result_control := STD_LOGIC_VECTOR(UNSIGNED(NOT entry1) + 1);
+
+                    WHEN "0111" => -- Absolute Value
+                        IF entry1(3) = '1' THEN
+                            result_control := STD_LOGIC_VECTOR(UNSIGNED(NOT entry1) + 1);
+                        ELSE
+                            result_control := entry1;
+                        END IF;
+
+                    WHEN OTHERS =>
+
+                        -- Generic result for any other type of operation chosen
+                        result_control := "1111";
+
+                END CASE;
+
+                -- Update the result with the temporary result
+                output <= result_control;
+
+                -- Check the flags for negative and zero!
+                IF result_control = "0000" THEN
+                    flag_zero <= '1';
+                ELSIF result_control(3) = '1' THEN
+                    flag_negative <= '1';    
+                END IF;
+            
+                -- Send to the state where things are resetted        
+                state := "100";
+
+            WHEN OTHERS =>
+
+                -- Clears the flags
+                flag_zero     <= '1';
+                flag_negative <= '0';
+                flag_overflow <= '0';
+                flag_carryout <= '0';
+                -- Resets the result and the state
+                output <= "0000";
+                state := "000";
+
+        END CASE;
+		END IF;
+    END IF;
+END PROCESS;
+END main;
