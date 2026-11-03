@@ -2,39 +2,66 @@ LIBRARY ieee;
 USE ieee.std_logic_1164.ALL;
 USE ieee.numeric_std.ALL;
 
+-- Button debouncer with single-pulse output.
+-- Filters out the mechanical bounce of a push button and generates a
+-- one-clock-cycle pulse each time a clean button press is detected.
 ENTITY debounce IS
     PORT (
-        clk     : IN  STD_LOGIC;
-        btn_in  : IN  STD_LOGIC;
-        btn_out : OUT STD_LOGIC
+        clk     : IN  STD_LOGIC;   -- System clock
+        btn_in  : IN  STD_LOGIC;   -- Raw (noisy) button input
+        btn_out : OUT STD_LOGIC    -- One-cycle pulse per debounced press
     );
 END debounce;
 
 ARCHITECTURE behavioral OF debounce IS
+    -- Number of consecutive clock cycles the input must differ from the
+    -- current stable value before the change is accepted.
+    -- Debounce time = max_count * clock period.
     CONSTANT max_count : INTEGER := 15_000_000;
-    
+
 BEGIN
     PROCESS(clk)
+        -- Two-stage synchronizer: brings the asynchronous button signal
+        -- into the clock domain and reduces the risk of metastability.
         VARIABLE btn_sync1  : STD_LOGIC := '0';
         VARIABLE btn_sync2  : STD_LOGIC := '0';
+
+        -- Current stable (debounced) state of the button.
         VARIABLE debounced  : STD_LOGIC := '0';
+
+        -- Counts how long the synchronized input has been different
+        -- from the debounced state.
         VARIABLE count      : INTEGER RANGE 0 TO max_count := 0;
     BEGIN
         IF RISING_EDGE(clk) THEN
+            -- Shift the raw input through the synchronizer.
             btn_sync1 := btn_in;
             btn_sync2 := btn_sync1;
+
+            -- Default output: no pulse. It is only set to '1' for one
+            -- clock cycle when a valid press is detected below.
             btn_out <= '0';
+
             IF btn_sync2 /= debounced THEN
+                -- Input disagrees with the stable state: it may be a real
+                -- change or just bounce, so start/continue counting.
                 IF count < max_count THEN
                     count := count + 1;
                 ELSE
+                    -- Input stayed different for max_count cycles:
+                    -- the change is real, so accept it.
                     debounced := btn_sync2;
                     count  := 0;
+
+                    -- Generate the pulse only on a press (0 -> 1),
+                    -- not on a release (1 -> 0).
                     IF btn_sync2 = '1' THEN
                         btn_out <= '1';
                     END IF;
                 END IF;
             ELSE
+                -- Input matches the stable state (or bounced back):
+                -- reset the counter, so any glitch restarts the timing.
                 count := 0;
             END IF;
         END IF;
